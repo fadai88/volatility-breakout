@@ -1,0 +1,101 @@
+import requests
+import json
+import pandas as pd
+import datetime as dt
+from heapq import nlargest
+from functools import reduce
+
+lst = ["ETH", "CAKE","LUNA", "DOT", "MANA", "SAND", "AVAX", "ALGO", "ATOM", "MATIC", "BNB", "SNX",
+       "THETA", "GRT", "LINK", "SHIB", "DOGE", "VET", "AXS", "SOL", "FIL", "TRX", "FTM", "FARM", 
+       "LTC", "ETC", "NEAR", "ALICE", "ICP", "EGLD", "OMG", "UNI", "ADA", "XRP", "ZEC", "QUICK",
+       "BAT", "ENJ", "GALA", "BTT", "1INCH", "SLP", "COMP", "ROSE", "ONT", "AAVE", "ANKR", "NEO", 
+       "XTZ", "WTC", "OCEAN", "IOTA", "IOTX", "COTI", "XLM", "QTUM", "AR", "MITH", "LINA", "BETA", 
+       "CELO", "ZIL", "HBAR", "GXS", "OGN", "ILV", "ALPHA", "RVN", "NU", "KAVA", "REEF", "SC", "SRM", 
+       "YGG", "AUDIO", "STORJ", "KEY", "ATA", "DODO", "POND", "CHZ", "YFI", "SUPER", "NKN", "INJ", 
+       "CVC", "EOS", "LRC", "ARPA", "LPT", "XVS", "KLAY", "CRV", "LTO", "MKR", "FTT", "ONE", "RNDR",
+       "FOR", "BICO","SYS", "CELR", "ALPACA", "BLZ", "DUSK", "KNC", "AKRO", "PERL", "PAXG", "DOCK", 
+       "MBOX", "BADGER", "ZRX", "DENT", "IDEX", "FIDA"]
+
+pair = "USDT"
+root_url = 'https://api.binance.com/api/v3/klines'
+interval = '1d'
+url = root_url + '?symbol=' + lst[0] + pair + '&interval=' + interval
+data = json.loads(requests.get(url).text)
+df = pd.DataFrame(data, columns=['open_time',
+                  'o', 'h', 'l', 'c', 'v',
+                  'close_time', 'qav', 'num_trades',
+                  'taker_base_vol', 'taker_quote_vol', 'ignore'])
+
+df.index = [dt.datetime.fromtimestamp(x/1000.0) for x in df.close_time]
+true_range = pd.DataFrame(columns=lst, index=range(len(df)))
+average_true_range = pd.DataFrame(columns=lst, index=range(len(df)))
+
+for i in range(1, len(df)):
+    true_range["ETH"][i] = float(max(df['h'][i], df['c'][i-1])) - float(min(df['l'][i], df['c'][i-1]))
+    
+close_prices = df[['open_time', 'c']]
+high = df[['open_time', 'h']]
+low = df[['open_time', 'l']]
+for i in lst[1:]:
+    url = root_url + '?symbol=' + i + pair + '&interval=' + interval
+    data = json.loads(requests.get(url).text)   
+    if 'msg' in data:
+        pass
+    else:
+        df = pd.DataFrame(data)
+        df.columns = ['open_time',
+                      'o', 'h', 'l', 'c', 'v',
+                      'close_time', 'qav', 'num_trades',
+                      'taker_base_vol', 'taker_quote_vol', 'ignore']
+        df.index = [dt.datetime.fromtimestamp(x/1000.0) for x in df.close_time]
+        close_price = df['c']
+        high_price = df['h']
+        low_price = df['l']
+        close_prices[i] = close_price
+        high[i] = high_price
+        low[i] = low_price
+        
+    for j in range(1, len(true_range)):
+        true_range[i][j] = max(float(high[i][j]), float(close_prices[i][j-1])) - min(float(low[i][j]), float(close_prices[i][j-1]))
+
+
+close_prices = close_prices.fillna(0)
+close_prices = close_prices.astype("float")
+high = high.fillna(0)
+high = high.astype("float")
+low = low.fillna(0)
+low = low.astype("float")
+close_prices.rename(columns = {'c':'ETH'}, inplace = True)
+high.rename(columns = {'h':'ETH'}, inplace = True)
+low.rename(columns = {'l':'ETH'}, inplace = True)
+true_range = true_range.fillna(0)
+true_range = true_range.astype("float")
+
+true_range.index = close_prices.index
+true_range.insert(0, "open_time", close_prices["open_time"])
+true_range.iloc[0] = high.iloc[0] - low.iloc[0]
+
+# Parameters
+# to look back at volatility of the last 14 days   
+atr_period = 14
+atr_constant = 2
+
+atr = pd.DataFrame(index=true_range.index, columns=true_range.columns)
+for col in atr.columns[1:]:
+    atr[col][atr_period-1] = true_range[col][:atr_period].mean()
+    for i in range(atr_period, len(atr)):
+        atr[col][i] = (atr[col][i-1] * (atr_period-1) + true_range[col][i]) / atr_period  
+
+
+#close_prices.to_excel("vol_br.xlsx")
+#true_range.to_excel("true_range.xlsx")
+atr.to_excel("atr.xlsx") 
+#high.to_excel("high.xlsx")
+
+actions = pd.DataFrame(columns=lst, index=atr.index)
+
+for col in actions.columns:
+    for i in range(len(actions)):
+        if high[col][i] >= atr[col][i-1] * atr_constant + close_prices[col][i-1]:
+            actions[col][i] = "buy"
+actions.to_excel("actions.xlsx")
